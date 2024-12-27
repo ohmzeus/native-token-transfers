@@ -6,7 +6,9 @@ import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "wormhole-solidity-sdk/Utils.sol";
 import "wormhole-solidity-sdk/libraries/BytesParsing.sol";
-import "olympus-v3/src/modules/MINTR/MINTR.sol";
+import {RolesConsumer} from "olympus-v3/src/modules/ROLES/OlympusRoles.sol";
+import {ROLESv1} from "olympus-v3/src/modules/ROLES/ROLES.v1.sol";
+import {MINTRv1} from "olympus-v3/src/modules/MINTR/MINTR.v1.sol";
 
 import "../libraries/RateLimiter.sol";
 
@@ -36,7 +38,7 @@ import {ManagerBase} from "./ManagerBase.sol";
 ///    to be too high, users will be refunded the difference.
 ///  - (optional) a flag to indicate whether the transfer should be queued
 ///    if the rate limit is exceeded
-contract NttManager is INttManager, RateLimiter, ManagerBase {
+contract NttManager is INttManager, RateLimiter, ManagerBase, Policy, RolesConsumer {
     using BytesParsing for bytes;
     using SafeERC20 for IERC20;
     using TrimmedAmountLib for uint256;
@@ -44,7 +46,8 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
 
     string public constant NTT_MANAGER_VERSION = "1.1.0";
 
-    MINTR public MINTR;
+    // Modules
+    MINTRv1 public MINTR;
 
     // =============== Setup =================================================================
 
@@ -53,8 +56,9 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
         Mode _mode,
         uint16 _chainId,
         uint64 _rateLimitDuration,
-        bool _skipRateLimiting
-    ) RateLimiter(_rateLimitDuration, _skipRateLimiting) ManagerBase(_token, _mode, _chainId) {}
+        bool _skipRateLimiting,
+        Kernel kernel_
+    ) RateLimiter(_rateLimitDuration, _skipRateLimiting) ManagerBase(_token, _mode, _chainId) Policy(kernel_) {}
 
     function __NttManager_init() internal onlyInitializing {
         // check if the owner is the deployer of this contract
@@ -73,6 +77,39 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
         __NttManager_init();
         _checkThresholdInvariants();
         _checkTransceiversInvariants();
+    }
+
+        /// @inheritdoc Policy
+    function configureDependencies() external override returns (Keycode[] memory dependencies) {
+        dependencies = new Keycode[](2);
+        dependencies[0] = toKeycode("MINTR");
+        dependencies[1] = toKeycode("ROLES");
+
+        MINTR = MINTRv1(getModuleAddress(dependencies[0]));
+        ROLES = ROLESv1(getModuleAddress(dependencies[1]));
+
+        (uint8 MINTR_MAJOR, ) = MINTR.VERSION();
+        (uint8 ROLES_MAJOR, ) = ROLES.VERSION();
+
+        // Ensure Modules are using the expected major version.
+        // Modules should be sorted in alphabetical order.
+        bytes memory expected = abi.encode([1, 1]);
+        if (MINTR_MAJOR != 1 || ROLES_MAJOR != 1) revert Policy_WrongModuleVersion(expected);
+    }
+
+    /// @inheritdoc Policy
+    function requestPermissions()
+        external
+        view
+        override
+        returns (Permissions[] memory permissions)
+    {
+        Keycode MINTR_KEYCODE = MINTR.KEYCODE();
+
+        permissions = new Permissions[](3);
+        permissions[0] = Permissions(MINTR_KEYCODE, MINTR.mintOhm.selector);
+        permissions[1] = Permissions(MINTR_KEYCODE, MINTR.burnOhm.selector);
+        permissions[2] = Permissions(MINTR_KEYCODE, MINTR.increaseMintApproval.selector);
     }
 
     // =============== Storage ==============================================================
@@ -152,8 +189,10 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
 
     function setBurning() external onlyRole("bridge_admin") {
         uint256 balance = IERC20(token).balanceOf(address(this));
+
         MINTR.increaseMintApproval(address(this), balance);
-        IERC20Burnable(token).burn(balance);
+        ERC20Burnable(token).burn(balance);
+
         Mode.BURNING = true;
     }
 
