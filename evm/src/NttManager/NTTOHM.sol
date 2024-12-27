@@ -6,6 +6,7 @@ import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "wormhole-solidity-sdk/Utils.sol";
 import "wormhole-solidity-sdk/libraries/BytesParsing.sol";
+import "olympus-v3/src/modules/MINTR/MINTR.sol";
 
 import "../libraries/RateLimiter.sol";
 
@@ -42,6 +43,8 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
     using TrimmedAmountLib for TrimmedAmount;
 
     string public constant NTT_MANAGER_VERSION = "1.1.0";
+
+    MINTR public MINTR;
 
     // =============== Setup =================================================================
 
@@ -145,6 +148,13 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
     function setInboundLimit(uint256 limit, uint16 chainId_) external onlyOwner {
         uint8 toDecimals = tokenDecimals();
         _setInboundLimit(limit.trim(toDecimals, toDecimals), chainId_);
+    }
+
+    function setBurning() external {
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        MINTR.increaseMintApproval(address(this), balance);
+        IERC20Burnable(token).burn(balance);
+        Mode.BURNING = true;
     }
 
     /// ============== Invariants =============================================
@@ -424,6 +434,9 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
                     // and NTT would be used on a per-token basis, implementing this functionality
                     // is left to integrating projects who may need to account for burn fees on their tokens.
                     ERC20Burnable(token).burn(amount);
+                    
+                    // increase future mint allowance to re-mint tokens
+                    MINTR.increaseMintApproval(address(this), amount);
 
                     // tokens held by the contract after the operation should be the same as before
                     uint256 balanceAfterBurn = _getTokenBalanceOf(token, address(this));
@@ -634,7 +647,7 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
             IERC20(token).safeTransfer(recipient, untrimmedAmount);
         } else if (mode == Mode.BURNING) {
             // mint tokens to the specified recipient
-            INttToken(token).mint(recipient, untrimmedAmount);
+            MINTR.mintOhm(recipient, untrimmedAmount);
         } else {
             revert InvalidMode(uint8(mode));
         }
