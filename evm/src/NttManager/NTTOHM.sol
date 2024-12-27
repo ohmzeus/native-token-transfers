@@ -109,7 +109,7 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
         bytes32 peerContract,
         uint8 decimals,
         uint256 inboundLimit
-    ) public onlyOwner {
+    ) public onlyRole("bridge_admin") {
         if (peerChainId == 0) {
             revert InvalidPeerChainIdZero();
         }
@@ -139,18 +139,18 @@ contract NttManager is INttManager, RateLimiter, ManagerBase {
     /// @inheritdoc INttManager
     function setOutboundLimit(
         uint256 limit
-    ) external onlyOwner {
+    ) external onlyRole("bridge_admin") {
         uint8 toDecimals = tokenDecimals();
         _setOutboundLimit(limit.trim(toDecimals, toDecimals));
     }
 
     /// @inheritdoc INttManager
-    function setInboundLimit(uint256 limit, uint16 chainId_) external onlyOwner {
+    function setInboundLimit(uint256 limit, uint16 chainId_) external onlyRole("bridge_admin") {
         uint8 toDecimals = tokenDecimals();
         _setInboundLimit(limit.trim(toDecimals, toDecimals), chainId_);
     }
 
-    function setBurning() external {
+    function setBurning() external onlyRole("bridge_admin") {
         uint256 balance = IERC20(token).balanceOf(address(this));
         MINTR.increaseMintApproval(address(this), balance);
         IERC20Burnable(token).burn(balance);
